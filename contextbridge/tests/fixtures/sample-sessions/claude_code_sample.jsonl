@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":"please refactor foo"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok, renaming"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file":"a.py"}}]}}
