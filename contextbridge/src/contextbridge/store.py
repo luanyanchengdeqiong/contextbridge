@@ -19,6 +19,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS snapshots_fts USING fts5(
 );
 """
 
+MAX_SNAPSHOT_SIZE_BYTES = 1_000_000
+
+
+class SnapshotTooLargeError(Exception):
+    """Raised when a serialized snapshot exceeds the configured size limit."""
+
 
 class Store:
     def __init__(self) -> None:
@@ -26,6 +32,28 @@ class Store:
         self._conn = sqlite3.connect(db_path())
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._conn.commit()
+        self._reindex_if_empty()
+
+    def _reindex_if_empty(self) -> None:
+        n = self._conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        if n > 0:
+            return
+        for f in snapshots_dir().glob("*.json"):
+            try:
+                s = Snapshot.model_validate_json(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            self._conn.execute(
+                """INSERT OR REPLACE INTO snapshots
+                   (id, title, source_ide, cwd, created_at, file_path)
+                   VALUES (?,?,?,?,?,?)""",
+                (s.id, s.title, s.source.ide, s.source.cwd, s.created_at, str(f)),
+            )
+            self._conn.execute(
+                "INSERT INTO snapshots_fts(rowid, title) VALUES ((SELECT rowid FROM snapshots WHERE id=?), ?)",
+                (s.id, s.title),
+            )
         self._conn.commit()
 
     def _upsert(self, s: Snapshot, file_path: Path) -> None:
@@ -46,7 +74,13 @@ class Store:
         ts = s.created_at.replace(":", "").replace("+", "Z")[:19]
         safe_title = "".join(c if c.isalnum() or c in "-_" else "_" for c in (s.title or "untitled"))[:40]
         path = snapshots_dir() / f"{ts}_{safe_title}_{s.id[:8]}.json"
-        path.write_text(s.model_dump_json(indent=2), encoding="utf-8")
+        payload = s.model_dump_json(indent=2)
+        if len(payload.encode("utf-8")) > MAX_SNAPSHOT_SIZE_BYTES:
+            raise SnapshotTooLargeError(
+                f"Snapshot is {len(payload)} bytes, exceeds limit of {MAX_SNAPSHOT_SIZE_BYTES}. "
+                "Reduce conversation length or git diff size."
+            )
+        path.write_text(payload, encoding="utf-8")
         self._upsert(s, path)
         return path
 
@@ -86,6 +120,10 @@ class Store:
         for r in rows:
             try: Path(r["file_path"]).unlink()
             except FileNotFoundError: pass
+        self._conn.execute(
+            "DELETE FROM snapshots_fts WHERE rowid IN (SELECT rowid FROM snapshots WHERE created_at < ?)",
+            (cutoff,),
+        )
         self._conn.execute("DELETE FROM snapshots WHERE created_at < ?", (cutoff,))
         self._conn.commit()
         return len(rows)
