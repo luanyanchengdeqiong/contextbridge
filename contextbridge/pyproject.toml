@@ -11,8 +11,8 @@ dependencies = [
 ]
 
 [project.scripts]
-contextbridge = "contextbridge.__main__:app"
-cb = "contextbridge.__main__:app"
+contextbridge = "contextbridge.__main__:main"
+cb = "contextbridge.__main__:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
