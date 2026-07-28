@@ -30,7 +30,7 @@ def _build_snapshot(
     else:
         conv = json.loads(conversation_json) if conversation_json else []
         msgs = [ConversationMessage(**m) for m in conv]
-        ide = "claude_code" if (conversation_json is None and cc.detect()) else "generic"
+        ide = "generic"
 
     msgs = truncate_conversation(msgs)
     raw_diff = get_git_diff(cwd) if include_diff else None
