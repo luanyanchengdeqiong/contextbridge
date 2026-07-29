@@ -2,7 +2,10 @@
 name = "contextbridge"
 version = "0.1.0"
 description = "Cross-IDE context handoff MCP server + CLI"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
+authors = [{ name = "YouLi", email = "y1096032139@gmail.com" }]
 dependencies = [
     "mcp[cli]>=1.2.0",
     "pydantic>=2.5",
