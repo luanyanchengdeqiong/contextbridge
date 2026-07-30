@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 from pathlib import Path
 from ..schema import ConversationMessage
@@ -57,7 +58,6 @@ class ClaudeCodeAdapter:
             if not line:
                 continue
             try:
-                import json
                 ev = json.loads(line)
             except Exception:
                 continue
@@ -70,6 +70,3 @@ class ClaudeCodeAdapter:
                 continue
             msgs.append(ConversationMessage(role=role, content=content))
         return msgs
-
-    def get_open_files(self) -> list[str]:
-        return []

@@ -24,6 +24,3 @@ class GenericAdapter:
 
     def parse_session(self) -> list[ConversationMessage]:
         return self.parse()
-
-    def get_open_files(self) -> list[str]:
-        return []

@@ -1,11 +1,19 @@
 from __future__ import annotations
 from typing import Optional
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.caching import CacheHint
+from mcp.types import CallToolResult, TextContent
 
 from .cli import _build_snapshot   # 复用 CLI 的快照构造逻辑
+from .render import render_handoff
 from .store import Store
 
-mcp = FastMCP("contextbridge")
+# MCP 2026-07-28 (SEP-2549): 工具列表变化极少,允许客户端缓存 5 分钟,
+# 减少重复 discover 的往返。cb_list 工具本身返回的是动态快照列表,不在此列。
+mcp = MCPServer(
+    "contextbridge",
+    cache_hints={"tools/list": CacheHint(ttl_ms=300_000, scope="private")},
+)
 
 
 def cb_export_impl(
@@ -34,15 +42,7 @@ def cb_import_impl(id: Optional[str] = None) -> str:
     s = Store().get(id) if id else Store().latest()
     if not s:
         return "No snapshot available."
-    parts = [
-        f"# Context Handoff — {s.title}",
-        f"source IDE: {s.source.ide}  cwd: {s.source.cwd}  created: {s.created_at}",
-    ]
-    for m in s.conversation:
-        parts.append(f"\n## {m.role}\n{m.content}")
-    if s.git_diff:
-        parts.append(f"\n## Current git diff\n```diff\n{s.git_diff}\n```")
-    return "\n".join(parts)
+    return render_handoff(s)
 
 
 def cb_clear_impl(older_than_days: int = 30) -> str:
@@ -55,14 +55,18 @@ def cb_export(
     title: Optional[str] = None,
     conversation: Optional[list[dict]] = None,
     include_diff: bool = True,
-) -> str:
+) -> CallToolResult:
     """Export current context as a snapshot.
 
     If running inside Claude Code / Codex CLI, the conversation is auto-collected
     from the local session file. Otherwise pass `conversation` as a list of
     {role, content} dicts (e.g. AI invoking this tool from Cursor).
+
+    Returns CallToolResult directly so the SDK does not synthesize a
+    structuredContent field (suspected to confuse some MCP clients).
     """
-    return cb_export_impl(title, conversation, include_diff)
+    msg = cb_export_impl(title, conversation, include_diff)
+    return CallToolResult(content=[TextContent(type="text", text=msg)], isError=False)
 
 
 @mcp.tool()

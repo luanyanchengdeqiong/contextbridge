@@ -29,7 +29,6 @@ class Snapshot(BaseModel):
     summary: Optional[str] = None
     conversation: list[ConversationMessage]
     git_diff: Optional[str] = None
-    open_files: list[str] = Field(default_factory=list)
 
     def model_post_init(self, __context) -> None:
         if not self.title:

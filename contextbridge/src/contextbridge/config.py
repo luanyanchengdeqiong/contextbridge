@@ -20,7 +20,3 @@ def db_path() -> Path:
 
 def snapshots_dir() -> Path:
     return get_home() / "snapshots"
-
-
-def config_path() -> Path:
-    return get_home() / "config.toml"

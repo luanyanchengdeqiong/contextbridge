@@ -1,12 +1,11 @@
 from pathlib import Path
-from contextbridge.config import get_home, ensure_dirs, db_path, snapshots_dir, config_path
+from contextbridge.config import get_home, ensure_dirs, db_path, snapshots_dir
 
 
 def test_paths_under_env(fake_home):
     ensure_dirs()
     assert db_path().parent == fake_home
     assert snapshots_dir().exists()
-    assert config_path().parent == fake_home
 
 
 def test_get_home_fallback(monkeypatch, tmp_path):

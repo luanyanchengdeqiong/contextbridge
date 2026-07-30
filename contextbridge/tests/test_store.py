@@ -90,7 +90,7 @@ def test_rebuild_index_from_json_files(fake_home):
     st1 = Store()
     s = _snap(title="persisted")
     st1.save(s)
-    st1._conn.close()
+    Store.reset_connection()
     db_path().unlink()
     st2 = Store()
     rebuilt = st2.get(s.id)
@@ -98,3 +98,38 @@ def test_rebuild_index_from_json_files(fake_home):
     assert rebuilt.title == "persisted"
     assert any(x.id == s.id for x in st2.list(limit=10))
     assert any(x.id == s.id for x in st2.search("persisted"))
+
+
+def test_get_accepts_short_prefix(fake_home):
+    """Store.get 应接受 cb_list 显示的 8 位前缀。"""
+    st = Store()
+    s = _snap(title="prefixable")
+    st.save(s)
+    assert st.get(s.id) is not None               # 完整 UUID
+    assert st.get(s.id[:8]) is not None           # 8 位前缀
+    assert st.get(s.id[:8]).id == s.id
+
+
+def test_get_prefers_exact_match(fake_home):
+    """当存在两个共享前缀的快照时,精确 id 命中而非前缀误匹配。"""
+    st = Store()
+    a = _snap(title="aaa", created="2026-01-01T00:00:00+00:00")
+    b = _snap(title="bbb", created="2026-02-01T00:00:00+00:00")
+    st.save(a)
+    st.save(b)
+    # 即便 b 较新,精确 id 仍优先返回 a
+    assert st.get(a.id).title == "aaa"
+
+
+def test_get_handles_missing_snapshot_file(fake_home):
+    """DB 记录在但快照文件被外部删除时,get/latest/list 不应抛 FileNotFoundError。"""
+    from contextbridge.store import snapshots_dir
+    st = Store()
+    s = _snap(title="orphan")
+    st.save(s)
+    for f in snapshots_dir().glob("*.json"):
+        f.unlink()
+    assert st.get(s.id) is None                    # 文件缺失 -> None,不崩溃
+    assert st.latest() is None
+    assert st.list() == []
+

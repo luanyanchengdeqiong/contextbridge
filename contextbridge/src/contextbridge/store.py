@@ -27,16 +27,36 @@ class SnapshotTooLargeError(Exception):
 
 
 class Store:
-    def __init__(self) -> None:
-        ensure_dirs()
-        self._conn = sqlite3.connect(db_path())
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(SCHEMA)
-        self._conn.commit()
-        self._reindex_if_empty()
+    # 进程级单例:MCP server 长期运行,每次 tool 调用若新建 sqlite 连接会泄漏。
+    # CLI 进程短命,单例也无害。测试用 reset_connection() 隔离。
+    _conn: sqlite3.Connection | None = None
 
-    def _reindex_if_empty(self) -> None:
-        n = self._conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+    @classmethod
+    def reset_connection(cls) -> None:
+        """Drop the cached connection. Used by tests to switch CONTEXTBRIDGE_HOME."""
+        if cls._conn is not None:
+            cls._conn.close()
+            cls._conn = None
+
+    @classmethod
+    def _connection(cls) -> sqlite3.Connection:
+        if cls._conn is None:
+            ensure_dirs()
+            conn = sqlite3.connect(db_path())
+            conn.row_factory = sqlite3.Row
+            conn.executescript(SCHEMA)
+            conn.commit()
+            cls._conn = conn
+            Store._reindex_if_empty(conn)
+        return cls._conn
+
+    def __init__(self) -> None:
+        # 触发单例初始化(兼容旧用法 Store().get(...))
+        self._conn = self._connection()
+
+    @staticmethod
+    def _reindex_if_empty(conn: sqlite3.Connection) -> None:
+        n = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
         if n > 0:
             return
         for f in snapshots_dir().glob("*.json"):
@@ -44,17 +64,26 @@ class Store:
                 s = Snapshot.model_validate_json(f.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            self._conn.execute(
+            conn.execute(
                 """INSERT OR REPLACE INTO snapshots
                    (id, title, source_ide, cwd, created_at, file_path)
                    VALUES (?,?,?,?,?,?)""",
                 (s.id, s.title, s.source.ide, s.source.cwd, s.created_at, str(f)),
             )
-            self._conn.execute(
+            conn.execute(
                 "INSERT INTO snapshots_fts(rowid, title) VALUES ((SELECT rowid FROM snapshots WHERE id=?), ?)",
                 (s.id, s.title),
             )
-        self._conn.commit()
+        conn.commit()
+
+    def _read_or_none(self, row: sqlite3.Row | None) -> Snapshot | None:
+        """读取快照文件;文件缺失(DB 有孤儿行)时返回 None 而非抛异常。"""
+        if row is None:
+            return None
+        try:
+            return Snapshot.model_validate_json(Path(row["file_path"]).read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError):
+            return None
 
     def _upsert(self, s: Snapshot, file_path: Path) -> None:
         self._conn.execute("DELETE FROM snapshots_fts WHERE rowid = (SELECT rowid FROM snapshots WHERE id=?)", (s.id,))
@@ -85,24 +114,28 @@ class Store:
         return path
 
     def get(self, snapshot_id: str) -> Snapshot | None:
+        # 接受完整 UUID 或 cb_list 显示的 8 位前缀。优先精确匹配,再做前缀 LIKE。
         row = self._conn.execute(
-            "SELECT file_path FROM snapshots WHERE id=?", (snapshot_id,)
+            "SELECT file_path FROM snapshots WHERE id = ?", (snapshot_id,)
         ).fetchone()
-        if not row:
-            return None
-        return Snapshot.model_validate_json(Path(row["file_path"]).read_text(encoding="utf-8"))
+        if row is None:
+            row = self._conn.execute(
+                "SELECT file_path FROM snapshots WHERE id LIKE ? || '%' ORDER BY created_at DESC LIMIT 1",
+                (snapshot_id,),
+            ).fetchone()
+        return self._read_or_none(row)
 
     def latest(self) -> Snapshot | None:
         row = self._conn.execute(
             "SELECT file_path FROM snapshots ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
-        return Snapshot.model_validate_json(Path(row["file_path"]).read_text(encoding="utf-8")) if row else None
+        return self._read_or_none(row)
 
     def list(self, limit: int = 20) -> list[Snapshot]:
         rows = self._conn.execute(
             "SELECT file_path FROM snapshots ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
-        return [Snapshot.model_validate_json(Path(r["file_path"]).read_text(encoding="utf-8")) for r in rows]
+        return [s for s in (self._read_or_none(r) for r in rows) if s is not None]
 
     def search(self, query: str, limit: int = 20) -> list[Snapshot]:
         rows = self._conn.execute(
@@ -110,7 +143,7 @@ class Store:
             "WHERE snapshots_fts MATCH ? ORDER BY s.created_at DESC LIMIT ?",
             (query, limit),
         ).fetchall()
-        return [Snapshot.model_validate_json(Path(r["file_path"]).read_text(encoding="utf-8")) for r in rows]
+        return [s for s in (self._read_or_none(r) for r in rows) if s is not None]
 
     def delete_older_than(self, days: int) -> int:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")

@@ -7,7 +7,10 @@ from rich.console import Console
 from rich.table import Table
 
 from .adapters.claude_code import ClaudeCodeAdapter
+from .adapters.codex import CodexAdapter
+from .adapters.zcode import ZCodeAdapter
 from .gitutils import get_git_diff
+from .render import render_handoff
 from .schema import ConversationMessage, Snapshot, SourceInfo
 from .store import Store
 from .truncation import truncate_conversation, truncate_diff
@@ -22,15 +25,14 @@ def _build_snapshot(
     include_diff: bool,
 ) -> Snapshot:
     cwd = os.getcwd()
-    # 显式传 --conversation 时优先用之（测试/脚本场景）；否则探测 Claude Code
-    cc = ClaudeCodeAdapter()
-    if conversation_json is None and cc.detect():
-        msgs = cc.parse_session()
-        ide = "claude_code"
-    else:
-        conv = json.loads(conversation_json) if conversation_json else []
+    # 显式传 --conversation 时优先用之（测试/脚本场景）；否则按链探测当前 IDE
+    msgs: list[ConversationMessage]
+    if conversation_json is not None:
+        conv = json.loads(conversation_json)
         msgs = [ConversationMessage(**m) for m in conv]
         ide = "generic"
+    else:
+        ide, msgs = _detect_and_parse()
 
     msgs = truncate_conversation(msgs)
     raw_diff = get_git_diff(cwd) if include_diff else None
@@ -42,6 +44,18 @@ def _build_snapshot(
         conversation=msgs,
         git_diff=diff,
     )
+
+
+def _detect_and_parse() -> tuple[str, list[ConversationMessage]]:
+    """按优先级探测当前所在的 IDE 并解析其会话。没探测到则返回空。"""
+    for adapter, name in (
+        (ClaudeCodeAdapter(), "claude_code"),
+        (ZCodeAdapter(), "zcode"),
+        (CodexAdapter(), "codex"),
+    ):
+        if adapter.detect():
+            return name, adapter.parse_session()
+    return "generic", []
 
 
 @app.command()
@@ -87,21 +101,7 @@ def import_(
     s = Store().get(id) if id else Store().latest()
     if not s:
         console.print("[red]No snapshot available.[/red]"); raise typer.Exit(1)
-    lines = [
-        f"# Context Handoff — {s.title}",
-        f"- source IDE: {s.source.ide}",
-        f"- cwd: {s.source.cwd}",
-        f"- created: {s.created_at}",
-        "",
-        "## Conversation so far",
-    ]
-    for m in s.conversation:
-        lines.append(f"### {m.role}")
-        lines.append(m.content)
-        lines.append("")
-    if s.git_diff:
-        lines += ["## Current git diff", "```diff", s.git_diff, "```", ""]
-    console.print("\n".join(lines))
+    console.print(render_handoff(s))
 
 
 @app.command()
