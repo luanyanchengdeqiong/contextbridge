@@ -9,18 +9,21 @@ ContextBridge 是 **Handoff 快照式** MCP server，专解 vibe coding 时跨 A
 ```
 contextbridge/
 └── src/contextbridge/
-    ├── __main__.py    # 入口：serve → MCP server；其它 → Typer CLI
+    ├── __main__.py    # 入口：serve → MCP server（stdio / --http）；其它 → Typer CLI
     ├── cli.py         # Typer CLI 5 命令 + _build_snapshot 共享逻辑
-    ├── server.py      # FastMCP server，4 个 cb_* 工具，复用 _build_snapshot / _impl 纯函数
+    ├── server.py      # MCPServer，4 个 cb_* 工具，复用 _build_snapshot / _impl 纯函数
     ├── store.py       # sqlite + FTS5 索引，JSON 快照落盘
     ├── schema.py      # pydantic: Snapshot / ConversationMessage / SourceInfo
+    ├── render.py      # 共享的 handoff 渲染（CLI import 与 MCP cb_import 复用）
     ├── truncation.py  # 对话按轮数 / 字符数裁剪；diff 截断
-    ├── gitutils.py    # 子进程收 git diff (HEAD + cached)
+    ├── gitutils.py    # 子进程收 git diff (HEAD + cached)，Windows handle 隔离
     ├── config.py      # 路径：CONTEXTBRIDGE_HOME 覆盖、HOME/USERPROFILE 兼容 WSL+Win
     └── adapters/
         ├── base.py        # SourceAdapter Protocol
         ├── generic.py     # GenericAdapter：从工具入参 conversation 喂入（Cursor / GUI 兜底）
-        └── claude_code.py # ClaudeCodeAdapter：读 ~/.claude/projects/<hash>/<sid>.jsonl 最新一个
+        ├── claude_code.py # ClaudeCodeAdapter：读 ~/.claude/projects/<hash>/<sid>.jsonl 最新一个
+        ├── codex.py       # CodexAdapter：读 ~/.codex/sessions/**/rollout-*.jsonl 最新一个
+        └── zcode.py       # ZCodeAdapter：读 ~/.zcode/cli/agents/**/transcript.jsonl 最新一个
 ```
 
 每个文件职责单一，能独立测试。
@@ -30,7 +33,8 @@ contextbridge/
 ```
 cb_export / `cb export`
   └─► _build_snapshot
-        ├─► ClaudeCodeAdapter.detect/parse_session（或 Generic 路径）
+        ├─► _detect_and_parse（优先级：ClaudeCode → ZCode → Codex → Generic）
+        │     └─► Adapter.detect/parse_session
         ├─► truncate_conversation（30 轮 + 80k 字符上限）
         ├─► get_git_diff（可选）
         └─► Store.save（写 JSON + sqlite + FTS5 rowid）
@@ -38,18 +42,18 @@ cb_export / `cb export`
 cb_list / `cb list`  ─► Store.list（sqlite ORDER BY created_at）
 cb_import / `cb import [id]`
   └─► Store.get / Store.latest
-        └─► 拼成 markdown 块返回给接手的 AI
+        └─► render_handoff 拼成 markdown 块返回给接手的 AI
 cb_clear / `cb clear N`  ─► Store.delete_older_than（删 json + sql + fts）
 ```
 
 ## Adapter 模型
 
 ```
-SourceAdapter (Protocol): name / detect / get_session_path / parse_session / get_open_files
+SourceAdapter (Protocol): name / detect / get_session_path / parse_session
    ├─ ClaudeCodeAdapter (auto-detect ~/.claude/projects/)
-   ├─ GenericAdapter    (conversation 入参，AI 喂入)
-   ├─ CodexAdapter      (TODO v2)
-   └─ GeminiAdapter     (TODO v2)
+   ├─ ZCodeAdapter      (auto-detect ~/.zcode/cli/agents/)
+   ├─ CodexAdapter      (auto-detect ~/.codex/sessions/)
+   └─ GenericAdapter    (conversation 入参，AI 喂入，兜底)
 ```
 
 新增 IDE 支持仅加一个 adapter，零侵入现有逻辑。

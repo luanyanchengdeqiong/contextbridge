@@ -61,6 +61,31 @@ pip install -e ".[dev]"
 > **WSL 用户**：注意 host 看到的家目录路径与 Linux 端的 `~` 可能不同。
 > 把 `cb` 写成绝对路径 `/home/<user>/.venv/contextbridge/bin/cb`，并确保 host 进程有权限访问。
 
+## 2.1 Streamable HTTP 模式（远程 / 网络测试）
+
+默认的 `cb serve` 走 stdio（本地 IDE 子进程），适合绝大多数场景。若需要远程访问或网络测试，可用 Streamable HTTP：
+
+```bash
+cb serve --http                 # 默认 127.0.0.1:8000
+cb serve --http -H 0.0.0.0 -p 9000   # 监听所有网卡、指定端口
+```
+
+HTTP 模式启用**无状态核心**（`stateless_http=True`，符合 MCP 2026-07-28 规范）：每个请求独立处理，不依赖 session——这与 ContextBridge 的文件+sqlite 无状态存储天然契合。
+
+对应的 host 配置（以 `url` 代替 `command`）：
+
+```json
+{
+  "mcpServers": {
+    "contextbridge": {
+      "url": "http://127.0.0.1:8000/mcp"
+    }
+  }
+}
+```
+
+> **安全提示**：`-H 0.0.0.0` 会暴露到局域网。生产环境请放在反向代理（Nginx/Caddy）后面并加鉴权；ContextBridge 本身不做 HTTP 层鉴权。
+
 ## 3. 故障排查
 
 - **工具没在 Claude/Cursor 里出现**：检查 JSON 是用绝对路径；保存后**完全退出** host（系统托盘 Exit）再启动；查日志
